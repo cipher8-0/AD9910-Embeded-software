@@ -1,0 +1,10 @@
+# STM32CubeIDE workspace metadata (machine-specific)
+.metadata/
+
+# Build output
+**/Debug/
+**/Release/
+
+# Python
+__pycache__/
+*.pyc
