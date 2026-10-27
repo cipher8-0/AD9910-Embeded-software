@@ -1,127 +1,168 @@
 # RaptorWatch: AD9910 DDS Chirp Generator Firmware and Tools
 
-Control firmware, host GUI and measurement analysis code for **RaptorWatch**, a DDS-based linear chirp generation module for an FMCW radar transmit chain. Final year project (EEE4022S), University of Cape Town.
+Control firmware and host software for **RaptorWatch**, a DDS-based linear chirp generation module for an FMCW radar transmit chain. Final year project (EEE4022S), University of Cape Town.
 
-> **Status:** This repository currently contains the software only. The PCB design files (schematic, layout, BOM, Gerbers) and measurement write-up will be added after the project has been assessed.
+> **Status:** This repository contains the software only. PCB design files and the measurement write-up are not included.
 
 ## Overview
 
 Commercial off-the-shelf FMCW radar front ends offer limited control over chirp parameters. RaptorWatch is a custom board built around the Analog Devices **AD9910** DDS (1 GSPS) that gives full control of the transmit waveform without hardware changes. This repository holds the code that makes the board usable:
 
-- **Firmware** for an STM32L476 processing board that drives the AD9910 over SPI and generates repeated chirp triggers from a hardware timer.
-- **Python GUI** that talks to the processing board over a USB CDC virtual serial link and exposes DDS control (initialise, status, single tone, chirp load, trigger and hold).
-- **Analysis notebook** that loads spectrum analyser captures (CSV export from a Keysight FieldFox) and produces the plots used in the report.
-
-The wider project also includes a controlled comparison of reference clock architectures (onboard crystal via PLL, external 25 MHz via PLL, and ~1 GHz bypassing the PLL), measured by SFDR and phase noise. See [Limitations](#limitations) for what was and was not completed.
+- **Firmware** for an STM32L476 processing board. It drives the AD9910 over SPI and generates hardware-timed chirp triggers from TIM1.
+- **Python GUI** (`board_gui.py`) that talks to the processing board over a USB CDC virtual COM port. It provides DDS initialisation and status, single tone output, chirp loading, triggering, hold, and chirp trains.
+- **Python test scripts** that check the USB link (`test_usb.py`) and the DDS command layer (`test_dds.py`) from the PC.
 
 ## System architecture
 
 ```
- PC (Python GUI)
-      |  USB CDC (virtual COM port)
+ PC (board_gui.py / test scripts)
+      |  USB CDC (virtual COM port), one text command per line
       v
  STM32L476 processing board
-      |  SPI2 + IO_UPDATE + DRCTL (timer-driven) + control lines
+      |  SPI2 + IO_UPDATE + DRCTL (TIM1 CH1) + control lines
       v
  AD9910 DDS board  ->  reconstruction filter  ->  balun  ->  SMA output
 ```
 
-The firmware is split into layers so each can be tested independently:
+The firmware is split into layers so each can be tested on its own:
 
-1. **AD9910 driver:** register-level access over SPI, with a register abstraction so the rest of the code never handles raw bit fields.
-2. **DDS command layer:** maps GUI commands (tone, chirp parameters, trigger, hold) onto driver calls. This layer has a dry-run mode, so the full command path can be tested on the processing board without the DDS board attached.
-3. **USB CDC command interface:** parses commands from the PC and returns status and error responses.
-
-Repeated sawtooth chirps are triggered by an STM32 hardware timer driving the AD9910 DRCTL pin, rather than by a per-chirp USB command. This keeps the chirp period set by the timer instead of by USB latency.
-
-## Hardware interface (draft pin mapping)
-
-| Signal | STM32 pin | Notes |
+| Layer | Files | Role |
 |---|---|---|
-| SPI2 SCK / MISO / MOSI | PB13 / PB14 / PB15 | AD9910 serial port |
-| SPI2 chip select | PB12 | |
-| DRCTL | PE9 | TIM1_CH1, timer-driven chirp trigger |
-| IO_UPDATE | PC3 | |
+| USB command interface | `usb_cmd.c/.h` | Assembles lines received over USB CDC, handles link-test commands (`PING`, `LED`, `ECHO`, `STAT`) and passes DDS commands on |
+| DDS command layer | `dds_cmd.c/.h` | Parses and validates DDS commands and maps them onto driver calls. Replies start with `OK <CMD>` or `ERR <CMD> <reason>` |
+| AD9910 driver | `ad9910.c/.h` | Register-level access over SPI: PLL setup, single tone, digital ramp generator (chirp) maths and programming |
+| Chirp train | `chirp_train.c/.h` | Plans and runs TIM1 pulse trains on DRCTL (single trigger, continuous train, or burst of N) |
+| Board configuration | `dds_board.h` | The only file that describes the wiring: pins, reference clock, PLL multiplier, timer clock and build switches |
 
-> This mapping reflects the current firmware. Check `[path/to/pin_config.h]` for the authoritative version.
+Repeated sawtooth chirps are triggered by TIM1 driving the AD9910 DRCTL pin, not by one USB command per chirp. The chirp period is therefore set by the timer and is unaffected by USB latency.
+
+See [AD9910_DRIVER_EXPLAINER.md](AD9910_DRIVER_EXPLAINER.md) and [DDS_COMMAND_LAYER_EXPLAINER.md](DDS_COMMAND_LAYER_EXPLAINER.md) for a detailed walkthrough of the driver and command layer.
 
 ## Repository layout
 
-> Adjust this to match the actual folder structure.
-
 ```
 .
-├── firmware/            STM32L476 firmware (driver, command layer, USB CDC)
-├── gui/                 Python host GUI
-├── analysis/            Jupyter notebook and helper scripts for spectrum captures
-├── data/                Example spectrum analyser CSV exports
-└── docs/                Supporting notes
+├── Processing_board_testing/        STM32CubeIDE project (STM32L476VETx)
+│   ├── Core/
+│   │   ├── Inc/                     Headers: ad9910.h, dds_board.h, dds_cmd.h,
+│   │   │                            chirp_train.h, usb_cmd.h, led_test.h, main.h
+│   │   ├── Src/                     Sources: ad9910.c, dds_cmd.c, chirp_train.c,
+│   │   │                            usb_cmd.c, led_test.c, main.c (+ CubeMX files)
+│   │   └── Startup/                 Startup assembly
+│   ├── Drivers/                     STM32 HAL and CMSIS (generated by CubeMX)
+│   ├── Middlewares/                 ST USB device library (CDC class)
+│   ├── USB_DEVICE/                  USB CDC glue (usbd_cdc_if.c receives commands)
+│   ├── Processing_board_testing.ioc CubeMX pin and peripheral configuration
+│   └── STM32L476VETX_*.ld           Linker scripts
+├── board_gui.py                     Tkinter desktop GUI
+├── test_usb.py                      USB CDC link test
+├── test_dds.py                      DDS command layer test
+├── AD9910_DRIVER_EXPLAINER.md       Driver documentation
+└── DDS_COMMAND_LAYER_EXPLAINER.md   Command layer documentation
 ```
+
+The `ad9910.c` and `ad9910.h` in the repository root are an earlier standalone copy of the driver. The version that is built is the one in `Processing_board_testing/Core/`.
+
+## Hardware interface
+
+Taken from `dds_board.h` and the `.ioc` file:
+
+| Signal | STM32 pin | Configuration |
+|---|---|---|
+| SPI2 SCK / MISO (AD9910 SDO) / MOSI (AD9910 SDIO) | PB13 / PB14 / PB15 | SPI2, AF5, master, 2.5 Mbit/s |
+| CSB | PB12 | GPIO output, idle high |
+| IO_UPDATE | PC3 | GPIO output |
+| MASTER_RESET | PB0 | GPIO output |
+| IO_RESET | PB1 | GPIO output |
+| DRCTL | PE9 | TIM1 CH1, PWM mode 2 (chirp trigger) |
+| DRHOLD | PC5 | GPIO output |
+| DROVER | PC10 | GPIO input |
+| PLL_LOCK | PC0 | GPIO input |
+| EXT_PWR_DWN | PC4 | GPIO output, held low |
+| OSK | PC1 | GPIO output, held low |
+| PROFILE0 / PROFILE1 / PROFILE2 | PA0 / PA1 / PC2 | GPIO outputs, held low (profile 0) |
+| USB D− / D+ | PA11 / PA12 | USB OTG FS (CDC device) |
+
+**Clock configuration:** 25 MHz reference into the AD9910 PLL with a ×40 multiplier, giving f_SYSCLK = 1 GHz. TIM1 is clocked at 80 MHz.
 
 ## Getting started
 
 ### Firmware
 
-**Requirements:** `[toolchain, e.g. STM32CubeIDE / arm-none-eabi-gcc, version]`, an STM32L476-based processing board and an ST-LINK programmer.
+**Requirements:** STM32CubeIDE (project generated with STM32CubeMX 6.11.0 and STM32Cube FW_L4 V1.18.2), the STM32L476 processing board and an ST-LINK programmer.
+
+1. In STM32CubeIDE, choose **File → Import → General → Existing Projects into Workspace** and select the `Processing_board_testing` folder.
+2. Check the settings in `Core/Inc/dds_board.h`:
+   - `DDS_DRY_RUN = 1` parses and validates every command and runs the full frequency and chirp maths, but never touches SPI or the AD9910 pins. Use this to test the GUI → USB → firmware path without the DDS board connected.
+   - `DDS_DRY_RUN = 0` drives the AD9910 (default).
+   - `DDS_TRAIN_HW = 1` runs TIM1 for real, even in dry-run mode, so the DRCTL pulses on PE9 can be checked on an oscilloscope.
+3. Build with **Project → Build Project**, then flash and run with **Run → Debug** (the `Processing_board_testing Debug.launch` configuration is included).
+
+Once flashed, the board enumerates as a USB CDC serial device (ST VID `0x0483`, PID `0x5740`).
+
+### Python GUI and tests
+
+**Requirements:** Python 3 with `pyserial`. Tkinter is included with the standard Python installer on Windows.
 
 ```bash
-# Build
-[build command]
+pip install pyserial
 
-# Flash
-[flash command or "Run > Debug in STM32CubeIDE"]
+# GUI
+python board_gui.py
+
+# Tests (replace COM5 with the board's port; list ports with: python -m serial.tools.list_ports)
+python test_usb.py COM5
+python test_dds.py COM5
 ```
 
-The processing board enumerates as a USB CDC serial device once flashed.
+In the GUI, select the board's COM port and click **Connect**. The **DDS** tab initialises the AD9910, reads its status, outputs a single tone, loads a sawtooth or triangle chirp, triggers it, and starts or stops hardware-timed chirp trains. The **Board** tab controls the LEDs and sends raw commands.
 
-### Python GUI
+## Command reference
 
-**Requirements:** Python 3.`[x]` and the packages in `requirements.txt`.
+Commands are plain text lines ending in `\n`. Numbers can be decimal or hex (`0x1F`).
 
-```bash
-pip install -r requirements.txt
-python gui/[main_script].py
-```
-
-Select the board's COM port, then use the DDS tab to initialise the device, read status, output a single tone, or load and trigger a chirp.
-
-### Analysis notebook
-
-```bash
-pip install jupyter numpy pandas matplotlib
-jupyter notebook analysis/[notebook_name].ipynb
-```
-
-The notebook expects FieldFox CSV exports in `data/`. Update the file paths in the first cell to point at your own captures.
+| Command | Action |
+|---|---|
+| `PING` | Link check, replies `PONG` |
+| `LED <0-7>` | Set the LED mask |
+| `ECHO <text>` | Echo text back (data integrity test) |
+| `STAT` | Report dropped receive bytes |
+| `DDS INIT` / `DDS STATUS` / `DDS RESET` | Configure the AD9910 (PLL, SPI mode), report state, or reset it |
+| `TONE <f_hz> [asf] [pow]` | Single tone. ASF 0–16383, POW 0–65535 |
+| `CHIRP <f_start_hz> <f_stop_hz> <t_ns> <SAW\|TRI>` | Load a linear chirp into the digital ramp generator |
+| `TRIG` | One sawtooth chirp |
+| `TRAIN <period_ns>` | Continuous sawtooth chirps, timed by TIM1 |
+| `BURST <n> <period_ns>` | Exactly *n* chirps, then the timer stops |
+| `STOP` | Stop a train or burst |
+| `HOLD <0\|1>` | Freeze or resume the ramp (DRHOLD) |
+| `WREG <addr> <value>` / `RREG <addr>` | Raw register write or read (debug) |
+| `PROBE` | Bit-banged SPI bring-up test that bypasses SPI2 |
 
 ## Testing
 
-- **Dry-run mode:** the DDS command layer passes its tests with no DDS board attached, verifying command parsing and the sequence of driver calls.
-- **Hardware bring-up:** single tone, sawtooth and triangle chirps were confirmed on the assembled board using an oscilloscope.
-- **Spectrum measurements:** captured with a Keysight FieldFox and analysed with the notebook in `analysis/`.
+- **USB link (`test_usb.py`):** `PING`, LED sequencing, 500 random `ECHO` round trips compared byte for byte (with a throughput figure), and error handling for unknown commands.
+- **Command layer (`test_dds.py`):** a scripted sequence of valid and deliberately invalid commands. It checks correct output and the rejection of out-of-range frequencies, amplitudes, chirp parameters and train periods. It passes in both dry-run and live modes.
+- **Hardware bring-up:** single tone, sawtooth and triangle chirps were confirmed on the assembled board with an oscilloscope. Spectrum measurements were taken with a Keysight FieldFox.
 
 ## Limitations
 
-- The reference clock comparison could not be completed. The highest-frequency signal generator available was 15 MHz, so the external-reference arms (external 25 MHz via PLL, and ~1 GHz bypassing the PLL) could not be run. All measurements reported are for the onboard crystal via PLL configuration. The comparison is documented as a recommendation for further work.
-- Oscilloscope bandwidth (50 MHz) limits what can be shown about chirp start and stop timing.
-- The pin mapping and timer configuration may change if the processing board interface changes.
+- The reference clock comparison could not be completed. The highest-frequency signal generator available was 15 MHz, so the external-reference arms (external 25 MHz via PLL, and ~1 GHz bypassing the PLL) could not be run. All reported measurements use the onboard crystal via PLL. The comparison is left as a recommendation for further work.
+- The 50 MHz oscilloscope bandwidth limits what can be shown about chirp start and stop timing.
 
-## Roadmap
+## Future work
 
-- Add PCB design files and the final report after assessment.
 - Run the reference clock architecture comparison once a suitable signal source is available.
-- Possible extensions: non-linear FM waveforms, waveform agility, multi-channel synchronisation.
+- Possible extensions: non-linear FM waveforms, waveform agility and multi-channel synchronisation.
 
 ## Acknowledgements
 
 - The STM32L476 processing board platform is by **Justin Pead**.
 - Reference material: the AD9910 datasheet, the AD9910/PCBZ evaluation board and UG-207, and the Sinara Urukul open-hardware board.
-- Project supervisor: `[supervisor name]`, University of Cape Town.
+
+## Third-party code
+
+The files in `Processing_board_testing/Drivers/` and `Processing_board_testing/Middlewares/`, plus the CubeMX-generated sources, are by STMicroelectronics and remain under their original licences (see the licence files in those folders).
 
 ## Author
 
 **Otsile Diale**, BSc Mechatronics Engineering, University of Cape Town.
-
-## License
-
-`[Choose a licence and add a LICENSE file, e.g. MIT.]` Check that no vendor-provided code (for example STM32 HAL or CubeMX-generated files) is being relicensed incorrectly; those files keep their original licences.
