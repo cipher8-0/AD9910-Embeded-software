@@ -36,7 +36,6 @@ The firmware is split into layers so each can be tested on its own:
 
 Repeated sawtooth chirps are triggered by TIM1 driving the AD9910 DRCTL pin, not by one USB command per chirp. The chirp period is therefore set by the timer and is unaffected by USB latency.
 
-See [AD9910_DRIVER_EXPLAINER.md](AD9910_DRIVER_EXPLAINER.md) and [DDS_COMMAND_LAYER_EXPLAINER.md](DDS_COMMAND_LAYER_EXPLAINER.md) for a detailed walkthrough of the driver and command layer.
 
 ## Repository layout
 
@@ -57,11 +56,10 @@ See [AD9910_DRIVER_EXPLAINER.md](AD9910_DRIVER_EXPLAINER.md) and [DDS_COMMAND_LA
 ├── board_gui.py                     Tkinter desktop GUI
 ├── test_usb.py                      USB CDC link test
 ├── test_dds.py                      DDS command layer test
-├── AD9910_DRIVER_EXPLAINER.md       Driver documentation
 └── DDS_COMMAND_LAYER_EXPLAINER.md   Command layer documentation
 ```
 
-The `ad9910.c` and `ad9910.h` in the repository root are an earlier standalone copy of the driver. The version that is built is the one in `Processing_board_testing/Core/`.
+
 
 ## Hardware interface
 
